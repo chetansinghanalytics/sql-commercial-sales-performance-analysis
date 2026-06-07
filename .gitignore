@@ -1,0 +1,23 @@
+# SQL Server database files
+*.mdf
+*.ndf
+*.ldf
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# SSMS and Visual Studio files
+.vs/
+*.user
+*.suo
+
+# Power BI temporary files
+*.pbit.lock
+*.pbix.lock
+
+# Windows system files
+Thumbs.db
+Desktop.ini
