@@ -7,6 +7,9 @@ Purpose:
 Generate 300,000 synthetic orders across three years, linking customers
 to sales representatives within the same region and creating realistic
 patterns by customer segment, channel, payment method and order status.
+
+Orders are distributed across all ten representatives in each region
+within every month, preventing unrealistic zero-activity periods.
 */
 
 USE CommercialSalesAnalysis;
@@ -15,10 +18,14 @@ GO
 SET NOCOUNT ON;
 GO
 
-IF EXISTS (SELECT 1 FROM dbo.Orders)
+IF EXISTS
+(
+    SELECT 1
+    FROM dbo.Orders
+)
 BEGIN
     PRINT 'Orders table already contains data. No records were inserted.';
-    RETURN;
+    SET NOEXEC ON;
 END;
 GO
 
@@ -41,6 +48,7 @@ OrderBase AS
             (n * 37) % 1096,
             CAST('2023-01-01' AS DATE)
         ) AS GeneratedOrderDate
+
     FROM Numbers
 ),
 CustomerOrders AS
@@ -58,7 +66,29 @@ CustomerOrders AS
             ELSE ob.GeneratedOrderDate
         END AS OrderDate,
 
-        ((ob.n * 7 - 1) % 10) + 1 AS RepPosition
+        ROW_NUMBER() OVER
+        (
+            PARTITION BY
+                c.Region,
+                YEAR
+                (
+                    CASE
+                        WHEN c.SignupDate > ob.GeneratedOrderDate
+                            THEN c.SignupDate
+                        ELSE ob.GeneratedOrderDate
+                    END
+                ),
+                MONTH
+                (
+                    CASE
+                        WHEN c.SignupDate > ob.GeneratedOrderDate
+                            THEN c.SignupDate
+                        ELSE ob.GeneratedOrderDate
+                    END
+                )
+
+            ORDER BY ob.n
+        ) AS OrderSequenceWithinRegionMonth
 
     FROM OrderBase AS ob
 
@@ -93,7 +123,10 @@ FinalOrderBase AS
 
     INNER JOIN Representatives AS r
         ON co.Region = r.Region
-       AND co.RepPosition = r.RepPosition
+       AND r.RepPosition =
+            (
+                (co.OrderSequenceWithinRegionMonth - 1) % 10
+            ) + 1
 )
 INSERT INTO dbo.Orders
 (
@@ -254,6 +287,10 @@ GO
 SET NOCOUNT OFF;
 GO
 
+/* =========================================================
+   Validation checks
+   ========================================================= */
+
 SELECT
     COUNT(*) AS OrderCount,
     MIN(OrderDate) AS FirstOrderDate,
@@ -264,11 +301,13 @@ GO
 SELECT
     OrderStatus,
     COUNT(*) AS OrderCount,
+
     CAST(
         COUNT(*) * 100.0
         / SUM(COUNT(*)) OVER ()
         AS DECIMAL(5,2)
     ) AS PercentageOfOrders
+
 FROM dbo.Orders
 GROUP BY OrderStatus
 ORDER BY OrderCount DESC;
@@ -276,6 +315,7 @@ GO
 
 SELECT
     COUNT(*) AS SalesRepRegionMismatchCount
+
 FROM dbo.Orders AS o
 
 INNER JOIN dbo.SalesRepresentatives AS sr
@@ -285,10 +325,37 @@ WHERE o.Region <> sr.Region;
 GO
 
 SELECT
-    OrderStatus,
-    MIN(ShippingCost) AS MinimumShippingCost,
-    MAX(ShippingCost) AS MaximumShippingCost
-FROM dbo.Orders
-GROUP BY OrderStatus
-ORDER BY OrderStatus;
+    MIN(ActiveSalesMonths) AS MinimumActiveMonths,
+    CAST(
+        AVG(ActiveSalesMonths * 1.0)
+        AS DECIMAL(10,2)
+    ) AS AverageActiveMonths,
+    MAX(ActiveSalesMonths) AS MaximumActiveMonths
+
+FROM
+(
+    SELECT
+        sr.SalesRepID,
+
+        COUNT
+        (
+            DISTINCT DATEFROMPARTS
+            (
+                YEAR(o.OrderDate),
+                MONTH(o.OrderDate),
+                1
+            )
+        ) AS ActiveSalesMonths
+
+    FROM dbo.SalesRepresentatives AS sr
+
+    LEFT JOIN dbo.Orders AS o
+        ON sr.SalesRepID = o.SalesRepID
+       AND o.OrderStatus <> 'Cancelled'
+
+    GROUP BY sr.SalesRepID
+) AS RepresentativeActivity;
+GO
+
+SET NOEXEC OFF;
 GO
